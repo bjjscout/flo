@@ -49,8 +49,6 @@ async def get_audio_stream_url(m3u8_url: str) -> str:
     content = await fetch_m3u8_content(m3u8_url)
     streams = parse_m3u8(content)
     
-    # Logic to select the most appropriate audio stream
-    # For this example, we'll just take the first stream, but you might want to implement more sophisticated selection criteria
     if streams:
         return streams[0]
     else:
@@ -69,27 +67,16 @@ async def convert_m3u8_to_mp3(input_url: str, output_path: str):
 @app.post("/convert")
 async def convert_m3u8_to_mp3_endpoint(request: M3U8Request, background_tasks: BackgroundTasks):
     try:
-        # Create a temporary directory
         temp_dir = tempfile.mkdtemp()
-        
-        # Generate a unique filename
         filename = f"{uuid.uuid4()}.mp3"
         output_path = os.path.join(temp_dir, filename)
 
-        # Get the audio stream URL
         audio_stream_url = await get_audio_stream_url(request.url)
-
-        # Convert M3U8 to MP3
         await convert_m3u8_to_mp3(audio_stream_url, output_path)
 
-        # Schedule file deletion after 30 minutes
         background_tasks.add_task(delete_file_after_delay, output_path, 30 * 60)
-        
-        # Store file creation time
         file_creation_times[output_path] = time.time()
 
-        # In a real-world scenario, you'd generate a download URL here
-        # For this example, we'll just return the file path
         return {"download_url": f"/download/{filename}", "file_path": output_path}
     except Exception as e:
         logger.error(f"Error in conversion process: {str(e)}")
@@ -97,8 +84,6 @@ async def convert_m3u8_to_mp3_endpoint(request: M3U8Request, background_tasks: B
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
-    # This is a placeholder for file download logic
-    # In a real-world scenario, you'd implement proper file serving here
     for filepath, creation_time in file_creation_times.items():
         if filepath.endswith(filename):
             if os.path.exists(filepath):
@@ -127,4 +112,5 @@ async def cleanup_old_files():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv('PORT', 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
