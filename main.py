@@ -57,9 +57,9 @@ async def get_audio_stream_url(m3u8_url: str) -> str:
 async def convert_m3u8_to_mp3(input_url: str, output_path: str):
     async with conversion_semaphore:
         try:
-            stream = ffmpeg.input(input_url)
+            stream = ffmpeg.input(input_url, protocol_whitelist='file,http,https,tcp,tls')
             stream = ffmpeg.output(stream, output_path, acodec='libmp3lame', ab='128k')
-            await asyncio.to_thread(ffmpeg.run, stream, overwrite_output=True)
+            await asyncio.to_thread(ffmpeg.run, stream, capture_stderr=True, overwrite_output=True)
         except ffmpeg.Error as e:
             logger.error(f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}")
             raise
@@ -67,19 +67,25 @@ async def convert_m3u8_to_mp3(input_url: str, output_path: str):
 @app.post("/convert")
 async def convert_m3u8_to_mp3_endpoint(request: M3U8Request, background_tasks: BackgroundTasks):
     try:
+        logger.info(f"Received conversion request for URL: {request.url}")
         temp_dir = tempfile.mkdtemp()
         filename = f"{uuid.uuid4()}.mp3"
         output_path = os.path.join(temp_dir, filename)
 
+        logger.info(f"Getting audio stream URL")
         audio_stream_url = await get_audio_stream_url(request.url)
+        logger.info(f"Audio stream URL: {audio_stream_url}")
+
+        logger.info(f"Starting conversion")
         await convert_m3u8_to_mp3(audio_stream_url, output_path)
+        logger.info(f"Conversion completed")
 
         background_tasks.add_task(delete_file_after_delay, output_path, 30 * 60)
         file_creation_times[output_path] = time.time()
 
         return {"download_url": f"/download/{filename}", "file_path": output_path}
     except Exception as e:
-        logger.error(f"Error in conversion process: {str(e)}")
+        logger.error(f"Error in conversion process: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/download/{filename}")
