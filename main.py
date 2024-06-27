@@ -107,11 +107,12 @@ async def startup_event():
         )
         stdout, stderr = await process.communicate()
         if process.returncode == 0:
-            logger.info(f"FFmpeg version: {stdout.decode().split('\n')[0]}")
+            ffmpeg_version = stdout.decode().split('\n')[0]
+            logger.info("FFmpeg version: {}".format(ffmpeg_version))
         else:
-            logger.error(f"FFmpeg not found or error: {stderr.decode()}")
+            logger.error("FFmpeg not found or error: {}".format(stderr.decode()))
     except Exception as e:
-        logger.error(f"Error checking FFmpeg: {str(e)}")
+        logger.error("Error checking FFmpeg: {}".format(str(e)))
 
 async def cleanup_old_files():
     while True:
