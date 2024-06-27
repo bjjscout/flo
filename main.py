@@ -71,21 +71,29 @@ async def convert_m3u8_to_mp3_endpoint(request: Request, m3u8_request: M3U8Reque
     try:
         logger.info(f"Received conversion request for URL: {m3u8_request.url}")
         temp_dir = tempfile.mkdtemp()
+        logger.info(f"Created temporary directory: {temp_dir}")
         filename = f"{uuid.uuid4()}.mp3"
+        logger.info(f"Generated filename: {filename}")
         output_path = os.path.join(temp_dir, filename)
+        logger.info(f"Full output path: {output_path}")
 
         logger.info(f"Starting conversion")
         await convert_m3u8_to_mp3(m3u8_request.url, output_path)
         logger.info(f"Conversion completed")
 
+        logger.info(f"Adding delete_file_after_delay task")
         background_tasks.add_task(delete_file_after_delay, output_path, 30 * 60)
         file_creation_times[output_path] = time.time()
+        logger.info(f"Added file to creation times dictionary")
 
         # Construct the full download URL
         base_url = str(request.base_url).rstrip('/')
         download_url = f"{base_url}/download/{filename}"
+        logger.info(f"Constructed download URL: {download_url}")
 
-        return {"download_url": download_url, "file_path": output_path}
+        response = {"download_url": download_url, "file_path": output_path}
+        logger.info(f"Sending response: {response}")
+        return response
     except Exception as e:
         logger.error(f"Error in conversion process: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
