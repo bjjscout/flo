@@ -41,30 +41,45 @@ async def fetch_m3u8_content(url: str) -> str:
         async with session.get(url) as response:
             return await response.text()
 
-def parse_m3u8(content: str) -> List[str]:
-    playlist = m3u8.loads(content)
-    return [variant.uri for variant in playlist.playlists]
-
 async def get_audio_stream_url(m3u8_url: str) -> str:
     content = await fetch_m3u8_content(m3u8_url)
-    streams = parse_m3u8(content)
+    playlist = m3u8.loads(content)
     
-    if streams:
-        # If the stream URL is relative, make it absolute
-        stream_url = streams[0]
-        if not stream_url.startswith('http'):
-            # Construct the absolute URL
-            base_url = m3u8_url.rsplit('/', 1)[0]
-            stream_url = f"{base_url}/{stream_url}"
-        return stream_url
+    # First, look for audio-only streams
+    audio_streams = [variant for variant in playlist.playlists if 'AUDIO' in variant.stream_info.keys()]
+    
+    if audio_streams:
+        stream_url = audio_streams[0].uri
+    elif playlist.playlists:
+        # If no audio-only stream, use the first available stream
+        stream_url = playlist.playlists[0].uri
     else:
-        raise ValueError("No audio streams found in the M3U8 playlist")
+        # If no playlists found, use the main m3u8 URL
+        return m3u8_url
+
+    # If the stream URL is relative, make it absolute
+    if not stream_url.startswith('http'):
+        base_url = m3u8_url.rsplit('/', 1)[0]
+        stream_url = f"{base_url}/{stream_url}"
+    
+    return stream_url
 
 async def convert_m3u8_to_mp3(input_url: str, output_path: str):
     async with conversion_semaphore:
         try:
-            stream = ffmpeg.input(input_url, protocol_whitelist='file,http,https,tcp,tls,crypto')
-            stream = ffmpeg.output(stream, output_path, acodec='libmp3lame', ab='128k')
+            # First, probe the input to check for audio streams
+            probe = await asyncio.to_thread(ffmpeg.probe, input_url)
+            audio_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'audio'), None)
+            
+            if audio_stream:
+                logger.info("Audio stream found in input")
+                stream = ffmpeg.input(input_url, protocol_whitelist='file,http,https,tcp,tls,crypto')
+                stream = ffmpeg.output(stream, output_path, acodec='libmp3lame', ab='128k', map='a')
+            else:
+                logger.info("No audio stream found, attempting to extract audio from video")
+                stream = ffmpeg.input(input_url, protocol_whitelist='file,http,https,tcp,tls,crypto')
+                stream = ffmpeg.output(stream, output_path, acodec='libmp3lame', ab='128k', vn=None)
+            
             cmd = ffmpeg.compile(stream)
             logger.info(f"FFmpeg command: {' '.join(cmd)}")
             await asyncio.to_thread(ffmpeg.run, stream, capture_stderr=True, overwrite_output=True)
