@@ -92,13 +92,27 @@ async def convert_m3u8_to_mp3_endpoint(request: Request, m3u8_request: M3U8Reque
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
-    for filepath, creation_time in file_creation_times.items():
-        if filepath.endswith(filename):
-            if os.path.exists(filepath):
-                return FileResponse(filepath, filename=filename, media_type='audio/mpeg')
-            else:
-                raise HTTPException(status_code=404, detail="File not found or expired")
-    raise HTTPException(status_code=404, detail="File not found")
+    logger.info(f"Download request received for filename: {filename}")
+    try:
+        for filepath, creation_time in file_creation_times.items():
+            if filepath.endswith(filename):
+                logger.info(f"Found matching file: {filepath}")
+                if os.path.exists(filepath):
+                    logger.info(f"File exists, attempting to serve: {filepath}")
+                    try:
+                        return FileResponse(filepath, filename=filename, media_type='audio/mpeg')
+                    except Exception as e:
+                        logger.error(f"Error serving file {filepath}: {str(e)}", exc_info=True)
+                        raise HTTPException(status_code=500, detail=f"Error serving file: {str(e)}")
+                else:
+                    logger.warning(f"File not found or expired: {filepath}")
+                    raise HTTPException(status_code=404, detail="File not found or expired")
+        
+        logger.warning(f"No matching file found for filename: {filename}")
+        raise HTTPException(status_code=404, detail="File not found")
+    except Exception as e:
+        logger.error(f"Unexpected error in download_file: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @app.on_event("startup")
 async def startup_event():
@@ -113,11 +127,11 @@ async def startup_event():
         stdout, stderr = await process.communicate()
         if process.returncode == 0:
             ffmpeg_version = stdout.decode().split('\n')[0]
-            logger.info("FFmpeg version: {}".format(ffmpeg_version))
+            logger.info(f"FFmpeg version: {ffmpeg_version}")
         else:
-            logger.error("FFmpeg not found or error: {}".format(stderr.decode()))
+            logger.error(f"FFmpeg not found or error: {stderr.decode()}")
     except Exception as e:
-        logger.error("Error checking FFmpeg: {}".format(str(e)))
+        logger.error(f"Error checking FFmpeg: {str(e)}")
 
 async def cleanup_old_files():
     while True:
