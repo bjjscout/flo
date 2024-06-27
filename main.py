@@ -4,11 +4,8 @@ import uuid
 import time
 import asyncio
 import aiohttp
-import m3u8
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-import ffmpeg
-from typing import List
 import logging
 
 app = FastAPI()
@@ -36,56 +33,35 @@ async def delete_file_after_delay(filepath: str, delay: int):
     except OSError as e:
         logger.error(f"Error deleting file {filepath}: {e}")
 
-async def fetch_m3u8_content(url: str) -> str:
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            return await response.text()
-
-async def get_audio_stream_url(m3u8_url: str) -> str:
-    content = await fetch_m3u8_content(m3u8_url)
-    playlist = m3u8.loads(content)
-    
-    # First, look for audio-only streams
-    audio_streams = [variant for variant in playlist.playlists if hasattr(variant.stream_info, 'audio') and variant.stream_info.audio]
-    
-    if audio_streams:
-        stream_url = audio_streams[0].uri
-    elif playlist.playlists:
-        # If no audio-only stream, use the first available stream
-        stream_url = playlist.playlists[0].uri
-    else:
-        # If no playlists found, use the main m3u8 URL
-        return m3u8_url
-
-    # If the stream URL is relative, make it absolute
-    if not stream_url.startswith('http'):
-        base_url = m3u8_url.rsplit('/', 1)[0]
-        stream_url = f"{base_url}/{stream_url}"
-    
-    logger.info(f"Selected stream URL: {stream_url}")
-    return stream_url
-
 async def convert_m3u8_to_mp3(input_url: str, output_path: str):
     async with conversion_semaphore:
         try:
-            # First, probe the input to check for audio streams
-            probe = await asyncio.to_thread(ffmpeg.probe, input_url)
-            audio_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'audio'), None)
+            # Direct conversion from HLS to MP3
+            cmd = [
+                'ffmpeg',
+                '-i', input_url,
+                '-vn',  # Disable video
+                '-acodec', 'libmp3lame',
+                '-ab', '128k',
+                output_path
+            ]
             
-            if audio_stream:
-                logger.info("Audio stream found in input")
-                stream = ffmpeg.input(input_url, protocol_whitelist='file,http,https,tcp,tls,crypto')
-                stream = ffmpeg.output(stream, output_path, acodec='libmp3lame', ab='128k', map='a')
-            else:
-                logger.info("No audio stream found, attempting to extract audio from video")
-                stream = ffmpeg.input(input_url, protocol_whitelist='file,http,https,tcp,tls,crypto')
-                stream = ffmpeg.output(stream, output_path, acodec='libmp3lame', ab='128k', vn=None)
+            logger.info(f"Converting HLS to MP3: {' '.join(cmd)}")
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
             
-            cmd = ffmpeg.compile(stream)
-            logger.info(f"FFmpeg command: {' '.join(cmd)}")
-            await asyncio.to_thread(ffmpeg.run, stream, capture_stderr=True, overwrite_output=True)
-        except ffmpeg.Error as e:
-            logger.error(f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}")
+            if process.returncode != 0:
+                logger.error(f"Error converting to MP3: {stderr.decode()}")
+                raise RuntimeError("Failed to convert HLS to MP3")
+
+            logger.info(f"Conversion completed: {output_path}")
+
+        except Exception as e:
+            logger.error(f"Conversion error: {str(e)}")
             raise
 
 @app.post("/convert")
@@ -96,12 +72,8 @@ async def convert_m3u8_to_mp3_endpoint(request: M3U8Request, background_tasks: B
         filename = f"{uuid.uuid4()}.mp3"
         output_path = os.path.join(temp_dir, filename)
 
-        logger.info(f"Getting audio stream URL")
-        audio_stream_url = await get_audio_stream_url(request.url)
-        logger.info(f"Audio stream URL: {audio_stream_url}")
-
         logger.info(f"Starting conversion")
-        await convert_m3u8_to_mp3(audio_stream_url, output_path)
+        await convert_m3u8_to_mp3(request.url, output_path)
         logger.info(f"Conversion completed")
 
         background_tasks.add_task(delete_file_after_delay, output_path, 30 * 60)
