@@ -55,8 +55,9 @@ async def convert_m3u8_to_mp3(input_url: str, output_path: str):
             stdout, stderr = await process.communicate()
             
             if process.returncode != 0:
-                logger.error(f"Error converting to MP3: {stderr.decode()}")
-                raise RuntimeError("Failed to convert HLS to MP3")
+                error_message = stderr.decode()
+                logger.error(f"Error converting to MP3: {error_message}")
+                raise RuntimeError(f"Failed to convert HLS to MP3: {error_message}")
 
             logger.info(f"Conversion completed: {output_path}")
 
@@ -97,6 +98,20 @@ async def download_file(filename: str):
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(cleanup_old_files())
+    # Test ffmpeg installation
+    try:
+        process = await asyncio.create_subprocess_exec(
+            'ffmpeg', '-version',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode == 0:
+            logger.info(f"FFmpeg version: {stdout.decode().split('\\n')[0]}")
+        else:
+            logger.error(f"FFmpeg not found or error: {stderr.decode()}")
+    except Exception as e:
+        logger.error(f"Error checking FFmpeg: {str(e)}")
 
 async def cleanup_old_files():
     while True:
