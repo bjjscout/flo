@@ -65,22 +65,30 @@ async def convert_m3u8_to_mp3(input_url: str, output_path: str):
             logger.error(f"Conversion error: {str(e)}")
             raise
 
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+
+# ... (other imports and code remain the same)
+
 @app.post("/convert")
-async def convert_m3u8_to_mp3_endpoint(request: M3U8Request, background_tasks: BackgroundTasks):
+async def convert_m3u8_to_mp3_endpoint(request: Request, m3u8_request: M3U8Request, background_tasks: BackgroundTasks):
     try:
-        logger.info(f"Received conversion request for URL: {request.url}")
+        logger.info(f"Received conversion request for URL: {m3u8_request.url}")
         temp_dir = tempfile.mkdtemp()
         filename = f"{uuid.uuid4()}.mp3"
         output_path = os.path.join(temp_dir, filename)
 
         logger.info(f"Starting conversion")
-        await convert_m3u8_to_mp3(request.url, output_path)
+        await convert_m3u8_to_mp3(m3u8_request.url, output_path)
         logger.info(f"Conversion completed")
 
         background_tasks.add_task(delete_file_after_delay, output_path, 30 * 60)
         file_creation_times[output_path] = time.time()
 
-        return {"download_url": f"/download/{filename}", "file_path": output_path}
+        # Construct the full download URL
+        base_url = str(request.base_url).rstrip('/')
+        download_url = f"{base_url}/download/{filename}"
+
+        return {"download_url": download_url, "file_path": output_path}
     except Exception as e:
         logger.error(f"Error in conversion process: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
