@@ -50,15 +50,23 @@ async def get_audio_stream_url(m3u8_url: str) -> str:
     streams = parse_m3u8(content)
     
     if streams:
-        return streams[0]
+        # If the stream URL is relative, make it absolute
+        stream_url = streams[0]
+        if not stream_url.startswith('http'):
+            # Construct the absolute URL
+            base_url = m3u8_url.rsplit('/', 1)[0]
+            stream_url = f"{base_url}/{stream_url}"
+        return stream_url
     else:
         raise ValueError("No audio streams found in the M3U8 playlist")
 
 async def convert_m3u8_to_mp3(input_url: str, output_path: str):
     async with conversion_semaphore:
         try:
-            stream = ffmpeg.input(input_url, protocol_whitelist='file,http,https,tcp,tls')
+            stream = ffmpeg.input(input_url, protocol_whitelist='file,http,https,tcp,tls,crypto')
             stream = ffmpeg.output(stream, output_path, acodec='libmp3lame', ab='128k')
+            cmd = ffmpeg.compile(stream)
+            logger.info(f"FFmpeg command: {' '.join(cmd)}")
             await asyncio.to_thread(ffmpeg.run, stream, capture_stderr=True, overwrite_output=True)
         except ffmpeg.Error as e:
             logger.error(f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}")
