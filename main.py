@@ -4,7 +4,8 @@ import uuid
 import time
 import asyncio
 import aiohttp
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import logging
 
@@ -65,10 +66,6 @@ async def convert_m3u8_to_mp3(input_url: str, output_path: str):
             logger.error(f"Conversion error: {str(e)}")
             raise
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
-
-# ... (other imports and code remain the same)
-
 @app.post("/convert")
 async def convert_m3u8_to_mp3_endpoint(request: Request, m3u8_request: M3U8Request, background_tasks: BackgroundTasks):
     try:
@@ -98,7 +95,7 @@ async def download_file(filename: str):
     for filepath, creation_time in file_creation_times.items():
         if filepath.endswith(filename):
             if os.path.exists(filepath):
-                return {"file_path": filepath}
+                return FileResponse(filepath, filename=filename, media_type='audio/mpeg')
             else:
                 raise HTTPException(status_code=404, detail="File not found or expired")
     raise HTTPException(status_code=404, detail="File not found")
