@@ -46,7 +46,7 @@ async def get_audio_stream_url(m3u8_url: str) -> str:
     playlist = m3u8.loads(content)
     
     # First, look for audio-only streams
-    audio_streams = [variant for variant in playlist.playlists if 'AUDIO' in variant.stream_info.keys()]
+    audio_streams = [variant for variant in playlist.playlists if hasattr(variant.stream_info, 'audio') and variant.stream_info.audio]
     
     if audio_streams:
         stream_url = audio_streams[0].uri
@@ -62,6 +62,7 @@ async def get_audio_stream_url(m3u8_url: str) -> str:
         base_url = m3u8_url.rsplit('/', 1)[0]
         stream_url = f"{base_url}/{stream_url}"
     
+    logger.info(f"Selected stream URL: {stream_url}")
     return stream_url
 
 async def convert_m3u8_to_mp3(input_url: str, output_path: str):
