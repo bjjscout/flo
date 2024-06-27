@@ -107,7 +107,7 @@ async def startup_event():
         )
         stdout, stderr = await process.communicate()
         if process.returncode == 0:
-            logger.info(f"FFmpeg version: {stdout.decode().split('\\n')[0]}")
+            logger.info(f"FFmpeg version: {stdout.decode().split('\n')[0]}")
         else:
             logger.error(f"FFmpeg not found or error: {stderr.decode()}")
     except Exception as e:
