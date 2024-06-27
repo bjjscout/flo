@@ -5,7 +5,7 @@ import time
 import asyncio
 import aiohttp
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 import logging
 
@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 class M3U8Request(BaseModel):
     url: str
 
-# Dictionary to store file creation times
-file_creation_times = {}
+# Dictionary to store file creation times and conversion progress
+file_info = {}
 
 # Semaphore to limit concurrent conversions
 MAX_CONCURRENT_CONVERSIONS = 3
@@ -29,12 +29,12 @@ async def delete_file_after_delay(filepath: str, delay: int):
     await asyncio.sleep(delay)
     try:
         os.remove(filepath)
-        del file_creation_times[filepath]
+        del file_info[filepath]
         logger.info(f"Deleted file: {filepath}")
     except OSError as e:
         logger.error(f"Error deleting file {filepath}: {e}")
 
-async def convert_m3u8_to_mp3(input_url: str, output_path: str):
+async def convert_m3u8_to_mp3(input_url: str, output_path: str, task_id: str):
     async with conversion_semaphore:
         try:
             # Direct conversion from HLS to MP3
@@ -53,17 +53,32 @@ async def convert_m3u8_to_mp3(input_url: str, output_path: str):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await process.communicate()
+            
+            while True:
+                if process.stdout.at_eof() and process.stderr.at_eof():
+                    break
+                for fd in (process.stderr, process.stdout):
+                    line = await fd.readline()
+                    if line:
+                        if b"time=" in line:
+                            # Extract time information and update progress
+                            time_info = line.decode().split("time=")[1].split()[0]
+                            file_info[task_id]['progress'] = time_info
+            
+            await process.wait()
             
             if process.returncode != 0:
-                error_message = stderr.decode()
-                logger.error(f"Error converting to MP3: {error_message}")
-                raise RuntimeError(f"Failed to convert HLS to MP3: {error_message}")
+                error_message = await process.stderr.read()
+                logger.error(f"Error converting to MP3: {error_message.decode()}")
+                raise RuntimeError(f"Failed to convert HLS to MP3: {error_message.decode()}")
 
             logger.info(f"Conversion completed: {output_path}")
+            file_info[task_id]['status'] = 'completed'
 
         except Exception as e:
             logger.error(f"Conversion error: {str(e)}")
+            file_info[task_id]['status'] = 'failed'
+            file_info[task_id]['error'] = str(e)
             raise
 
 @app.post("/convert")
@@ -73,29 +88,50 @@ async def convert_m3u8_to_mp3_endpoint(request: Request, m3u8_request: M3U8Reque
         temp_dir = tempfile.mkdtemp()
         filename = f"{uuid.uuid4()}.mp3"
         output_path = os.path.join(temp_dir, filename)
+        task_id = str(uuid.uuid4())
 
-        logger.info(f"Starting conversion")
-        await convert_m3u8_to_mp3(m3u8_request.url, output_path)
-        logger.info(f"Conversion completed")
+        file_info[task_id] = {
+            'status': 'processing',
+            'progress': '0:00:00',
+            'output_path': output_path,
+            'filename': filename
+        }
 
+        background_tasks.add_task(convert_m3u8_to_mp3, m3u8_request.url, output_path, task_id)
         background_tasks.add_task(delete_file_after_delay, output_path, 30 * 60)
-        file_creation_times[output_path] = time.time()
 
-        # Construct the full download URL
+        # Construct the full status URL
         base_url = str(request.base_url).rstrip('/')
-        download_url = f"{base_url}/download/{filename}"
+        status_url = f"{base_url}/status/{task_id}"
 
-        return {"download_url": download_url, "file_path": output_path}
+        return {"task_id": task_id, "status_url": status_url}
     except Exception as e:
         logger.error(f"Error in conversion process: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/status/{task_id}")
+async def get_conversion_status(task_id: str):
+    if task_id in file_info:
+        status_info = file_info[task_id]
+        if status_info['status'] == 'completed':
+            # Construct the full download URL
+            base_url = str(request.base_url).rstrip('/')
+            download_url = f"{base_url}/download/{status_info['filename']}"
+            return {"status": status_info['status'], "download_url": download_url}
+        elif status_info['status'] == 'failed':
+            return {"status": status_info['status'], "error": status_info.get('error', 'Unknown error')}
+        else:
+            return {"status": status_info['status'], "progress": status_info['progress']}
+    else:
+        raise HTTPException(status_code=404, detail="Task not found")
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
     logger.info(f"Download request received for filename: {filename}")
     try:
-        for filepath, creation_time in file_creation_times.items():
-            if filepath.endswith(filename):
+        for task_id, info in file_info.items():
+            if info['filename'] == filename:
+                filepath = info['output_path']
                 logger.info(f"Found matching file: {filepath}")
                 if os.path.exists(filepath):
                     logger.info(f"File exists, attempting to serve: {filepath}")
@@ -136,18 +172,18 @@ async def startup_event():
 async def cleanup_old_files():
     while True:
         current_time = time.time()
-        files_to_delete = [file for file, creation_time in file_creation_times.items() 
-                           if current_time - creation_time > 30 * 60]
-        for file in files_to_delete:
+        tasks_to_delete = [task_id for task_id, info in file_info.items() 
+                           if current_time - info.get('creation_time', 0) > 30 * 60]
+        for task_id in tasks_to_delete:
             try:
-                os.remove(file)
-                del file_creation_times[file]
-                logger.info(f"Cleaned up old file: {file}")
+                os.remove(file_info[task_id]['output_path'])
+                del file_info[task_id]
+                logger.info(f"Cleaned up old file for task: {task_id}")
             except OSError as e:
-                logger.error(f"Error deleting old file {file}: {e}")
+                logger.error(f"Error deleting old file for task {task_id}: {e}")
         await asyncio.sleep(60)  # Check every minute
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv('PORT', 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, timeout_keep_alive=120)
