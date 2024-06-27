@@ -42,7 +42,10 @@ async def convert_m3u8_to_mp3(input_url: str, output_path: str, task_id: str):
                 '-i', input_url,
                 '-vn',  # Disable video
                 '-acodec', 'libmp3lame',
-                '-ab', '128k',
+                '-ac', '1',  # Convert to mono
+                '-ar', '16000',  # Resample to 16 kHz
+                '-ab', '32k',  # Set bitrate to 32 kbps
+                '-f', 'mp3',  # Force MP3 format
                 output_path
             ]
             
